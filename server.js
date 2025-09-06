@@ -88,7 +88,11 @@ function updatePlayerPositions() {
     if (!player) return;
 
     // Rotation (yaw around local up)
-    player.rotation.yaw += player.inputs.rotate * 0.05;
+    if (player.inputs.yaw) {
+      player.rotation.yaw = player.inputs.yaw;
+    } else {
+      player.rotation.yaw += player.inputs.rotate * 0.05;
+    }
 
     // Get up vector (radial)
     const up = normalizeVec({ ...player.position });
