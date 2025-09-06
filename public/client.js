@@ -50,6 +50,8 @@ if (!isMobile) {
         inputState.shoot = true;
         e.preventDefault();
         break;
+      default:
+        return; // Ignore other keys
     }
     updateLocalPrediction();
   });
@@ -75,6 +77,8 @@ if (!isMobile) {
       case 'Space':
         inputState.shoot = false;
         break;
+      default:
+        return; // Ignore other keys
     }
     updateLocalPrediction();
   });
