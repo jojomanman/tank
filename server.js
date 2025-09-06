@@ -8,30 +8,66 @@ const io = socketIo(server);
 
 app.use(express.static('public'));
 
-// Game State Management
+// Game State Management - 3D
 let players = {};
 let bullets = [];
-const GAME_WIDTH = 800;
-const GAME_HEIGHT = 600;
-const TANK_SPEED = 2;
-const BULLET_SPEED = 5;
+let deformationCraters = []; // Array of {position: {x,y,z}, depth: number}
+const PLANET_RADIUS = 5;
+const TANK_HEIGHT = 0.5;
+const BULLET_SPEED = 0.1;
 const SHOOT_COOLDOWN = 500; // ms
+const GRAVITY = 0.01; // Scaled for small planet
+const MAX_CRATERS = 50;
+
+// Function to generate random point on sphere surface
+function randomSurfacePosition() {
+  const u = Math.random();
+  const v = Math.random();
+  const theta = 2 * Math.PI * u;
+  const phi = Math.acos(2 * v - 1);
+  const x = PLANET_RADIUS * Math.sin(phi) * Math.cos(theta);
+  const y = PLANET_RADIUS * Math.sin(phi) * Math.sin(theta);
+  const z = PLANET_RADIUS * Math.cos(phi);
+  return { x, y, z };
+}
+
+// Normalize vector
+function normalizeVec(vec) {
+  const mag = Math.sqrt(vec.x**2 + vec.y**2 + vec.z**2);
+  if (mag > 0) {
+    vec.x /= mag;
+    vec.y /= mag;
+    vec.z /= mag;
+  }
+  return vec;
+}
+
+// Add vectors
+function addVec(a, b) {
+  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+// Scale vector
+function scaleVec(vec, s) {
+  return { x: vec.x * s, y: vec.y * s, z: vec.z * s };
+}
 
 // Handle Connections
 io.on('connection', (socket) => {
   console.log('Player connected:', socket.id);
   
-  // Create new tank for player
+  // Create new tank for player on surface
+  const startPos = randomSurfacePosition();
   players[socket.id] = {
-    x: Math.random() * GAME_WIDTH,
-    y: Math.random() * GAME_HEIGHT,
-    angle: 0,
+    position: { ...startPos },
+    rotation: { yaw: 0 },
     health: 100,
-    inputs: { left: false, right: false, forward: false, shoot: false },
-    lastShootTime: 0
+    inputs: { rotate: 0, move: 0, shoot: false },
+    lastShootTime: 0,
+    velocity: { x: 0, y: 0, z: 0 }
   };
   
-  // Handle Player Input
+  // Handle Player Input - now 3D compatible
   socket.on('playerInput', (inputData) => {
     const player = players[socket.id];
     if (player) {
@@ -45,76 +81,114 @@ io.on('connection', (socket) => {
   });
 });
 
-// Update Player Positions and Shooting
+// Update Player Positions - Spherical Movement
 function updatePlayerPositions() {
   Object.keys(players).forEach(id => {
     const player = players[id];
     if (!player) return;
 
-    // Rotation
-    if (player.inputs.left) {
-      player.angle -= 0.05;
+    // Rotation (yaw around local up)
+    player.rotation.yaw += player.inputs.rotate * 0.05;
+
+    // Get up vector (radial)
+    const up = normalizeVec({ ...player.position });
+
+    // Forward direction (perpendicular to up and global y or based on yaw)
+    const forward = {
+      x: Math.sin(player.rotation.yaw) * up.z - Math.cos(player.rotation.yaw) * up.x, // Simplified for equatorial
+      y: 0,
+      z: -Math.sin(player.rotation.yaw) * up.x - Math.cos(player.rotation.yaw) * up.z
+    };
+    normalizeVec(forward);
+
+    // Apply movement tangential
+    if (player.inputs.move !== 0) {
+      const moveVec = scaleVec(forward, player.inputs.move * 0.02);
+      player.velocity = addVec(player.velocity, moveVec);
     }
-    if (player.inputs.right) {
-      player.angle += 0.05;
-    }
 
-    // Movement
-    if (player.inputs.forward) {
-      player.x += Math.cos(player.angle) * TANK_SPEED;
-      player.y += Math.sin(player.angle) * TANK_SPEED;
-    }
+    // Apply gravity (towards center)
+    const gravityDir = scaleVec(up, -GRAVITY);
+    player.velocity = addVec(player.velocity, gravityDir);
 
-    // Backward movement (add if needed)
-    // if (player.inputs.backward) {
-    //   player.x -= Math.cos(player.angle) * TANK_SPEED;
-    //   player.y -= Math.sin(player.angle) * TANK_SPEED;
-    // }
+    // Update position
+    player.position = addVec(player.position, player.velocity);
 
-    // Keep in bounds
-    player.x = Math.max(0, Math.min(GAME_WIDTH, player.x));
-    player.y = Math.max(0, Math.min(GAME_HEIGHT, player.y));
+    // Project back to surface (simple for now)
+    const dist = Math.sqrt(player.position.x**2 + player.position.y**2 + player.position.z**2);
+    const factor = (PLANET_RADIUS + TANK_HEIGHT) / dist;
+    player.position.x *= factor;
+    player.position.y *= factor;
+    player.position.z *= factor;
 
-    // Shooting
+    // Damp velocity
+    player.velocity = scaleVec(player.velocity, 0.95);
+
+    // Shooting in 3D direction
     if (player.inputs.shoot && Date.now() - player.lastShootTime > SHOOT_COOLDOWN) {
+      const dir = {
+        x: Math.sin(player.rotation.yaw) * Math.cos(0), // Pitch 0
+        y: Math.sin(0), // Pitch
+        z: Math.cos(player.rotation.yaw) * Math.cos(0)
+      };
+      normalizeVec(dir);
       bullets.push({
-        x: player.x,
-        y: player.y,
-        angle: player.angle,
-        ownerId: id,
-        speed: BULLET_SPEED
+        position: { ...player.position },
+        velocity: scaleVec(dir, BULLET_SPEED),
+        ownerId: id
       });
       player.lastShootTime = Date.now();
     }
   });
 }
 
-// Update Bullet Positions
+// Update Bullet Positions - 3D Trajectory with Gravity
 function updateBulletPositions() {
   bullets.forEach((bullet, index) => {
-    bullet.x += Math.cos(bullet.angle) * bullet.speed;
-    bullet.y += Math.sin(bullet.angle) * bullet.speed;
+    // Apply velocity
+    bullet.position = addVec(bullet.position, bullet.velocity);
 
-    // Remove off-screen bullets
-    if (bullet.x < 0 || bullet.x > GAME_WIDTH || bullet.y < 0 || bullet.y > GAME_HEIGHT) {
+    // Apply gravity towards center
+    const up = normalizeVec({ ...bullet.position });
+    const gravityDir = scaleVec(up, -GRAVITY * 2); // Stronger for bullets
+    bullet.velocity = addVec(bullet.velocity, gravityDir);
+
+    // Check for ground hit (deformation)
+    const dist = Math.sqrt(bullet.position.x**2 + bullet.position.y**2 + bullet.position.z**2);
+    if (dist <= PLANET_RADIUS + 0.1) { // Hit surface
+      // Create crater at impact point
+      const impactPos = scaleVec(up, PLANET_RADIUS);
+      deformationCraters.push({
+        position: impactPos,
+        depth: 0.2 + Math.random() * 0.1
+      });
+      if (deformationCraters.length > MAX_CRATERS) {
+        deformationCraters.shift(); // Remove oldest
+      }
+      bullets.splice(index, 1);
+      return;
+    }
+
+    // Remove if too far
+    if (dist > PLANET_RADIUS * 3) {
       bullets.splice(index, 1);
     }
   });
 }
 
-// Check Collisions
+// Check Collisions - 3D
 function checkCollisions() {
   bullets.forEach((bullet, bulletIndex) => {
     Object.keys(players).forEach(id => {
       const player = players[id];
       if (!player || id === bullet.ownerId) return;
 
-      // Simple distance check for collision
-      const dx = bullet.x - player.x;
-      const dy = bullet.y - player.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
+      const dx = bullet.position.x - player.position.x;
+      const dy = bullet.position.y - player.position.y;
+      const dz = bullet.position.z - player.position.z;
+      const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-      if (distance < 20) { // Collision radius
+      if (distance < 0.5) { // Collision radius
         player.health -= 20;
         bullets.splice(bulletIndex, 1);
 
@@ -133,11 +207,15 @@ setInterval(() => {
   updateBulletPositions();
   checkCollisions();
 
-  // Broadcast the new state to all clients
-  io.emit('gameState', { players, bullets });
+  // Broadcast 3D state to clients
+  io.emit('gameState', { 
+    players, 
+    bullets, 
+    deformationCraters 
+  });
 }, 1000 / 60);
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
