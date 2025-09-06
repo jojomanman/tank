@@ -50,6 +50,8 @@ if (!isMobile) {
         inputState.shoot = true;
         e.preventDefault();
         break;
+      default:
+        return;
     }
     updateLocalPrediction();
   });
@@ -75,6 +77,8 @@ if (!isMobile) {
       case 'Space':
         inputState.shoot = false;
         break;
+      default:
+        return;
     }
     updateLocalPrediction();
   });
@@ -171,12 +175,14 @@ function updateLocalPrediction() {
 
   // Gravity (towards origin)
   const posNorm = Math.sqrt(localPlayerState.position.x**2 + localPlayerState.position.y**2 + localPlayerState.position.z**2);
-  const upX = localPlayerState.position.x / posNorm;
-  const upY = localPlayerState.position.y / posNorm;
-  const upZ = localPlayerState.position.z / posNorm;
-  localPlayerState.velocity.x += upX * -0.01;
-  localPlayerState.velocity.y += upY * -0.01;
-  localPlayerState.velocity.z += upZ * -0.01;
+  if (posNorm > 0) {
+    const upX = localPlayerState.position.x / posNorm;
+    const upY = localPlayerState.position.y / posNorm;
+    const upZ = localPlayerState.position.z / posNorm;
+    localPlayerState.velocity.x += upX * -0.01;
+    localPlayerState.velocity.y += upY * -0.01;
+    localPlayerState.velocity.z += upZ * -0.01;
+  }
 
   // Update position
   localPlayerState.position.x += localPlayerState.velocity.x;
@@ -185,10 +191,12 @@ function updateLocalPrediction() {
 
   // Project to surface
   const dist = Math.sqrt(localPlayerState.position.x**2 + localPlayerState.position.y**2 + localPlayerState.position.z**2);
-  const factor = 5.5 / dist;
-  localPlayerState.position.x *= factor;
-  localPlayerState.position.y *= factor;
-  localPlayerState.position.z *= factor;
+  if (dist > 0) {
+    const factor = 5.5 / dist;
+    localPlayerState.position.x *= factor;
+    localPlayerState.position.y *= factor;
+    localPlayerState.position.z *= factor;
+  }
 
   // Damp velocity
   localPlayerState.velocity.x *= 0.95;
